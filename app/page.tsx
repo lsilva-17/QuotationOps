@@ -35,6 +35,7 @@ export default function Home() {
   const [declaredQuantity, setDeclaredQuantity] = useState<number>();
   const [declaredTotalSqm, setDeclaredTotalSqm] = useState<number>();
   const [loading, setLoading] = useState(false);
+  const [hasAnalysed, setHasAnalysed] = useState(false);
   const [error, setError] = useState<string>();
 
   const totals = useMemo(() => {
@@ -44,6 +45,16 @@ export default function Home() {
     return { quantity, area, value };
   }, [openings, rate]);
 
+  function resetAnalysis() {
+    setOpenings([]);
+    setPages(0);
+    setWarnings([]);
+    setDeclaredQuantity(undefined);
+    setDeclaredTotalSqm(undefined);
+    setHasAnalysed(false);
+    setError(undefined);
+  }
+
   async function analyse() {
     if (!files.length) {
       setError("Select at least one PDF first.");
@@ -51,21 +62,34 @@ export default function Home() {
     }
 
     setLoading(true);
+    setHasAnalysed(false);
     setError(undefined);
     setWarnings([]);
+    setOpenings([]);
+    setPages(0);
+    setDeclaredQuantity(undefined);
+    setDeclaredTotalSqm(undefined);
 
     try {
       const form = new FormData();
       files.forEach((file) => form.append("documents", file));
-      const response = await fetch("/api/analyze", { method: "POST", body: form });
-      const data = (await response.json()) as AnalysisResponse;
-      if (!response.ok) throw new Error(data.error ?? "PDF analysis failed.");
 
-      setOpenings(data.openings);
-      setPages(data.pages);
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        body: form
+      });
+
+      const data = (await response.json()) as AnalysisResponse;
+      if (!response.ok) {
+        throw new Error(data.error ?? "PDF analysis failed.");
+      }
+
+      setOpenings(data.openings ?? []);
+      setPages(data.pages ?? 0);
       setWarnings(data.warnings ?? []);
       setDeclaredQuantity(data.declaredQuantity);
       setDeclaredTotalSqm(data.declaredTotalSqm);
+      setHasAnalysed(true);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "PDF analysis failed.");
     } finally {
@@ -83,8 +107,10 @@ export default function Home() {
       </header>
 
       <section className="card">
-        <h1>Project takeoff</h1>
-        <p className="muted">Upload the quotation or takeoff PDFs. Rows are identified from Item No. and QTY; SQM is recalculated from Width × Height × QTY.</p>
+        <p className="muted">
+          Upload the quotation or takeoff PDFs. Rows are identified from Item No. and QTY; SQM is recalculated from Width × Height × QTY.
+        </p>
+
         <div className="formRow">
           <div className="field">
             <label htmlFor="documents">Project PDFs</label>
@@ -93,9 +119,13 @@ export default function Home() {
               type="file"
               accept="application/pdf"
               multiple
-              onChange={(event) => setFiles(Array.from(event.target.files ?? []))}
+              onChange={(event) => {
+                setFiles(Array.from(event.target.files ?? []));
+                resetAnalysis();
+              }}
             />
           </div>
+
           <div className="field">
             <label htmlFor="rate">Base price / m² (AUD)</label>
             <input
@@ -107,60 +137,123 @@ export default function Home() {
               onChange={(event) => setRate(Math.max(0, Number(event.target.value) || 0))}
             />
           </div>
-          <button className="primary" type="button" onClick={analyse} disabled={loading || !files.length}>
+
+          <button
+            className="primary"
+            type="button"
+            onClick={analyse}
+            disabled={loading || !files.length}
+          >
             {loading ? "Analysing…" : "Start analysis"}
           </button>
         </div>
+
         {error ? <p><strong>{error}</strong></p> : null}
+
         {warnings.length ? (
           <div className="panel">
-            {warnings.slice(0, 8).map((warning) => <div key={warning} className="muted">⚠ {warning}</div>)}
-            {warnings.length > 8 ? <div className="muted">+ {warnings.length - 8} more extraction warnings</div> : null}
+            {warnings.slice(0, 8).map((warning) => (
+              <div key={warning} className="muted">⚠ {warning}</div>
+            ))}
+            {warnings.length > 8 ? (
+              <div className="muted">+ {warnings.length - 8} more extraction warnings</div>
+            ) : null}
           </div>
         ) : null}
       </section>
 
-      <section className="grid panel">
-        <div className="card"><div className="muted">Openings / QTY</div><div className="metric">{totals.quantity}</div>{declaredQuantity ? <div className="muted">PDF total: {declaredQuantity}</div> : null}</div>
-        <div className="card"><div className="muted">Total area</div><div className="metric">{totals.area.toFixed(2)} m²</div>{declaredTotalSqm ? <div className="muted">PDF total: {declaredTotalSqm.toFixed(2)} m²</div> : null}</div>
-        <div className="card"><div className="muted">Rows extracted</div><div className="metric">{openings.length}</div><div className="muted">Across {pages} pages</div></div>
-        <div className="card"><div className="muted">Estimated value</div><div className="metric">A${totals.value.toLocaleString("en-AU", { maximumFractionDigits: 0 })}</div></div>
-      </section>
+      {hasAnalysed ? (
+        <>
+          <section className="grid panel">
+            <div className="card">
+              <div className="muted">Openings / QTY</div>
+              <div className="metric">{totals.quantity}</div>
+              {declaredQuantity ? <div className="muted">PDF total: {declaredQuantity}</div> : null}
+            </div>
 
-      <section className="card panel">
-        <div className="header">
-          <div>
-            <h2>Takeoff results</h2>
-            <div className="muted">Every table row keeps Item No., QTY, dimensions and source page. SQM never trusts the source PDF calculation.</div>
-          </div>
-          <button className="primary" type="button" disabled={!openings.length}>Export Excel</button>
-        </div>
-        <div className="tableWrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Item No.</th><th>Type</th><th>Width</th><th>Height</th><th>QTY</th><th>Unit SQM</th><th>Total SQM</th><th>Source</th><th>Estimate</th>
-              </tr>
-            </thead>
-            <tbody>
-              {openings.map((opening, index) => (
-                <tr key={`${opening.source.documentName}-${opening.source.page}-${opening.reference}-${index}`}>
-                  <td><strong>{opening.reference}</strong><br /><span className="muted">{opening.level}</span></td>
-                  <td>{opening.series ?? "—"} {opening.category.replaceAll("_", " ")}</td>
-                  <td>{opening.widthMm} mm</td>
-                  <td>{opening.heightMm} mm</td>
-                  <td><strong>{opening.quantity}</strong></td>
-                  <td>{unitSqm(opening).toFixed(3)}</td>
-                  <td><strong>{totalSqm(opening).toFixed(3)}</strong></td>
-                  <td>{opening.source.documentName}<br /><span className="muted">Page {opening.source.page}</span></td>
-                  <td>A${estimatedPrice(opening, rate).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {!openings.length && !loading ? <p className="muted">No analysis yet.</p> : null}
-        </div>
-      </section>
+            <div className="card">
+              <div className="muted">Total area</div>
+              <div className="metric">{totals.area.toFixed(2)} m²</div>
+              {declaredTotalSqm ? <div className="muted">PDF total: {declaredTotalSqm.toFixed(2)} m²</div> : null}
+            </div>
+
+            <div className="card">
+              <div className="muted">Rows extracted</div>
+              <div className="metric">{openings.length}</div>
+              <div className="muted">Across {pages} pages</div>
+            </div>
+
+            <div className="card">
+              <div className="muted">Estimated value</div>
+              <div className="metric">
+                A${totals.value.toLocaleString("en-AU", { maximumFractionDigits: 0 })}
+              </div>
+            </div>
+          </section>
+
+          <section className="card panel">
+            <div className="header">
+              <div>
+                <h2>Takeoff results</h2>
+                <div className="muted">
+                  Every table row keeps Item No., QTY, dimensions and source page. SQM is recalculated from Width × Height × QTY.
+                </div>
+              </div>
+              <button className="primary" type="button" disabled={!openings.length}>
+                Export Excel
+              </button>
+            </div>
+
+            <div className="tableWrap">
+              {openings.length ? (
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Item No.</th>
+                      <th>Type</th>
+                      <th>Width</th>
+                      <th>Height</th>
+                      <th>QTY</th>
+                      <th>Unit SQM</th>
+                      <th>Total SQM</th>
+                      <th>Source</th>
+                      <th>Estimate</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {openings.map((opening, index) => (
+                      <tr key={`${opening.source.documentName}-${opening.source.page}-${opening.reference}-${index}`}>
+                        <td>
+                          <strong>{opening.reference}</strong><br />
+                          <span className="muted">{opening.level}</span>
+                        </td>
+                        <td>{opening.series ?? "—"} {opening.category.replaceAll("_", " ")}</td>
+                        <td>{opening.widthMm} mm</td>
+                        <td>{opening.heightMm} mm</td>
+                        <td><strong>{opening.quantity}</strong></td>
+                        <td>{unitSqm(opening).toFixed(3)}</td>
+                        <td><strong>{totalSqm(opening).toFixed(3)}</strong></td>
+                        <td>
+                          {opening.source.documentName}<br />
+                          <span className="muted">Page {opening.source.page}</span>
+                        </td>
+                        <td>
+                          A${estimatedPrice(opening, rate).toLocaleString("en-AU", {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2
+                          })}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <p className="muted">Analysis finished, but no valid takeoff rows were extracted.</p>
+              )}
+            </div>
+          </section>
+        </>
+      ) : null}
     </main>
   );
 }
